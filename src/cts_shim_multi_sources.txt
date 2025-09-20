@@ -1,0 +1,70 @@
+CTS Multi-Source Ingest Shim — SAM API + SEWP/NITAAC Files → SQLite → Exports
+=============================================================================
+
+What this does
+--------------
+- Pulls live SAM.gov opportunities via API (if $env:SAM_API_KEY is set).
+- Ingests NASA SEWP and NITAAC from local CSV/XLSX exports (no scraping; terms-friendly).
+- Normalizes everything into SQLite (leads + documents tables), auto-populating cts_id and active.
+- Exports to CSV, XLSX, and Markdown (one note per lead).
+
+PowerShell quick start
+----------------------
+# Required for SAM.gov (optional if you only do file ingests)
+$env:SAM_API_KEY = "YOUR_KEY"
+
+# Optional filters for SAM
+$env:CTS_QUERY       = "zero trust"
+$env:CTS_POSTED_FROM = "2025-08-01"
+$env:CTS_POSTED_TO   = "2025-08-26"
+$env:CTS_LIMIT       = "100"
+
+# Optional file ingests (point these to your local exports)
+$env:CTS_SEWP_FILE   = "C:\CTS\Lead_Generation\data\sewp_export.xlsx"
+$env:CTS_NITAAC_FILE = "C:\CTS\Lead_Generation\data\nitaac_export.csv"
+
+# Outputs (override if you want)
+$env:CTS_DB_PATH     = "C:\CTS\Lead_Generation\leads.db"
+$env:CTS_EXPORT_DIR  = "C:\CTS\Lead_Generation\exports"
+
+# Run
+python cts_shim_multi_sources.py
+
+Schema
+------
+leads(
+  id TEXT PRIMARY KEY,
+  cts_id TEXT,
+  title TEXT,
+  agency TEXT,
+  posted TEXT,
+  due TEXT,
+  keywords TEXT,
+  value_estimate TEXT,
+  source TEXT,
+  created TEXT,
+  edited TEXT,
+  status TEXT,
+  product_match TEXT,
+  feature TEXT,
+  priority TEXT,
+  partner_strategy TEXT,
+  wf_status TEXT,
+  active TEXT,
+  next_action_date TEXT,
+  owner TEXT,
+  notes TEXT
+)
+
+documents(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id TEXT,
+  url TEXT,
+  label TEXT
+)
+
+Notes
+-----
+- CTS ID format: CTS-<SOURCE>-<yyyymmdd_posted>-<id>
+- The 'documents' table stores detected URLs; exports include a 'doc_urls' concatenated column.
+- Extend to other sources by mapping into the same leads schema and reusing the upsert + export pipeline.

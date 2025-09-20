@@ -1,0 +1,4 @@
+id,title,agency,posted,due,keywords,value_estimate,source,created,edited,status,product_match,priority,partner_strategy,wf_status,next_action_date,owner,notes
+SAM12345,AI Cyber Defense for DHS,DHS CISA,2025-08-01,2025-09-15,"AI cyber defense, zero trust, anomaly detection",$25M,sam.gov,2025-08-23 10:00,2025-08-23 10:00,Target,Darktrace,P0,Prime,triage,2025-08-30,Tom,High visibility DHS opp; Darktrace fit.
+GSA99887,Secure Voice Analytics Modernization,VA,2025-07-20,2025-08-25,"voice biometrics, AI transcription, telehealth",Unknown,gsa_ebuy,2025-08-23 10:15,2025-08-23 10:15,Monitor,Audivi,P1,Teaming,in_review,2025-08-28,Tom,VA likely looking for pilot. Audivi may sub with larger prime.
+DOE55577,Exascale HPC Storage Expansion,DOE Oak Ridge,2025-07-10,2025-09-01,"HPC, exascale, scale-out storage",$100M+,nasa_sewp,2025-08-23 10:30,2025-08-23 10:30,Target,Kove,P0,Sub,queued,2025-08-27,Tom,DOE HPC project; Kove to partner with Dell/Cray.

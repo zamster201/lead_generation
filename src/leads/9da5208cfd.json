@@ -1,0 +1,19 @@
+{
+  "title": "Hello World RFP",
+  "agency": "NASA",
+  "due_date": "2025-09-30",
+  "keywords": [
+    "space"
+  ],
+  "value_estimate": "$1M",
+  "uid": "9da5208cfd",
+  "created": "2025-08-18T19:46:36.056421",
+  "edited": "2025-08-18T19:46:36.056426",
+  "origin": "external",
+  "source": "ingest",
+  "wf_status": "unfiled",
+  "tags": [
+    "lead",
+    "rfp"
+  ]
+}

@@ -1,0 +1,151 @@
+
+============================================================
+Filename: reset_sqlite_schema.py
+============================================================
+
+#!/usr/bin/env python3
+# Reset (drop & recreate) the CTS leads schema
+
+import argparse
+import sqlite3
+from contextlib import closing
+
+DDL = '''
+PRAGMA foreign_keys = ON;
+
+BEGIN IMMEDIATE;
+
+DROP TABLE IF EXISTS leads;
+
+CREATE TABLE leads (
+  id INTEGER PRIMARY KEY,
+  opportunity_id TEXT UNIQUE NOT NULL,
+  title TEXT NOT NULL,
+  source_url TEXT,
+  agency TEXT,
+  vehicle TEXT,
+  posted_date TEXT,
+  due_date TEXT,
+  status_stage TEXT CHECK (status_stage IN ('new','screen','qual','bid','no-bid','submitted','won','lost')) DEFAULT 'new',
+  est_value NUMERIC,
+  contract_type TEXT,
+  naics TEXT,
+  set_aside TEXT,
+  keywords TEXT,
+  fit_score REAL CHECK (fit_score BETWEEN 0 AND 1),
+  risk_score REAL CHECK (risk_score IS NULL OR risk_score BETWEEN 0 AND 1),
+  requirements_summary TEXT,
+  compliance_checklist TEXT,
+  contacts TEXT,
+  partners TEXT,
+  notes TEXT,
+  origin TEXT DEFAULT 'cts_shim',
+  generated_by TEXT,
+  generated_on TEXT,
+  reviewed INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_due_date ON leads(due_date);
+CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status_stage);
+CREATE INDEX IF NOT EXISTS idx_leads_agency ON leads(agency);
+CREATE INDEX IF NOT EXISTS idx_leads_naics ON leads(naics);
+
+CREATE TRIGGER IF NOT EXISTS trg_leads_updated
+AFTER UPDATE ON leads
+FOR EACH ROW
+BEGIN
+  UPDATE leads SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+COMMIT;
+'''
+
+def main():
+    ap = argparse.ArgumentParser(description='Reset (drop & recreate) the CTS leads schema.')
+    ap.add_argument('--db', required=True, help='Path to SQLite DB file (will be created if missing).')
+    args = ap.parse_args()
+
+    with closing(sqlite3.connect(args.db)) as conn:
+        conn.executescript(DDL)
+    print(f"[OK] Schema reset at: {args.db}")
+
+if __name__ == '__main__':
+    main()
+
+
+============================================================
+Filename: cleanup_old_exports.ps1
+============================================================
+
+param(
+  [string[]] $Paths = @(
+    "C:\CTS\Lead_Generation\exports",
+    "C:\CTS\Utilities\pdf_index_search\exports",
+    "C:\CTS\RFP_Hunter\exports"
+  ),
+  [string[]] $FilePatterns = @("*.json","*.csv","*.md","*.ndjson"),
+  [switch] $PurgeSubdirs,
+  [switch] $DryRun = $true
+)
+
+function Remove-ItemSafe {
+  param([string]$Target)
+  if ($DryRun) { Write-Host "[DRY-RUN] DEL $Target"; return }
+  try {
+    Remove-Item -LiteralPath $Target -Force -ErrorAction Stop
+    Write-Host "[OK] Deleted $Target"
+  } catch {
+    Write-Warning "Failed to delete $Target: $($_.Exception.Message)"
+  }
+}
+
+foreach ($p in $Paths) {
+  if (-not (Test-Path $p)) { Write-Warning "Skip (missing): $p"; continue }
+  Write-Host "`n==> Scanning $p"
+
+  foreach ($pat in $FilePatterns) {
+    Get-ChildItem -LiteralPath $p -Recurse:$PurgeSubdirs.IsPresent -File -Filter $pat -ErrorAction SilentlyContinue | ForEach-Object {
+      Remove-ItemSafe -Target $_.FullName
+    }
+  }
+
+  if ($PurgeSubdirs) {
+    Get-ChildItem -LiteralPath $p -Recurse -Directory | Sort-Object FullName -Descending | ForEach-Object {
+      if (-not (Get-ChildItem -LiteralPath $_.FullName -Recurse -Force)) {
+        Remove-ItemSafe -Target $_.FullName
+      }
+    }
+  }
+}
+
+Write-Host "`nDone. Use -DryRun:$false to actually delete. Example:"
+Write-Host "  .\cleanup_old_exports.ps1 -PurgeSubdirs -DryRun:`$false"
+
+
+============================================================
+Filename: reset_all.ps1
+============================================================
+
+param(
+  [string] $DbPath = "C:\CTS\Lead_Generation\data\cts_opportunities.db",
+  [string] $Python = "python",
+  [string] $CleanupScript = "$PSScriptRoot\\cleanup_old_exports.ps1",
+  [switch] $PurgeSubdirs,
+  [switch] $ActuallyDelete
+)
+
+Write-Host "[1/3] Resetting SQLite schema..."
+& $Python "$PSScriptRoot\\reset_sqlite_schema.py" --db $DbPath
+if ($LASTEXITCODE -ne 0) { throw "Schema reset failed." }
+
+Write-Host "[2/3] Cleaning exports..."
+$dry = $true
+if ($ActuallyDelete) { $dry = $false }
+& powershell -ExecutionPolicy Bypass -File $CleanupScript -PurgeSubdirs:$PurgeSubdirs.IsPresent -DryRun:$dry
+
+Write-Host "[3/3] Archiving stray utilities (optional manual step)."
+Write-Host "Move old scripts to CTS\\_archive\\utilities\\ (skip if not needed)."
+
+Write-Host "Done."
