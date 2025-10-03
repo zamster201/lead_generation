@@ -6,7 +6,6 @@ import re
 import string
 from collections import defaultdict
 from write_runlog import write_runlog
-from urllib.parse import urlencode, quote_plus
 
 from scoring import fit_score as compute_fit, risk_score as compute_risk
 from sam_client import request_sam
@@ -198,24 +197,6 @@ def build_sam_params(args):
         "limit": args.limit
     }
 
-BASE_URL = "https://api.sam.gov/opportunities/v2/search"
-
-import urllib.parse import urlencode
-
-def build_sam_url(params: dict) -> str:
-    """
-    Build a clean SAM.gov API search URL from parameters.
-    Only includes keys with non-empty values.
-    """
-    base_url = "https://api.sam.gov/opportunities/v2/search"
-
-    # Ensure only valid params are included
-    query = urllib.parse.urlencode(
-        {k: v for k, v in params.items() if v is not None and v != ""}
-    )
-
-    return f"{base_url}?{query}"
-
 # -------------------- main --------------------
 
 def main():
@@ -344,6 +325,12 @@ def main():
 
 print("[DEBUG] Running map_sam_item_to_lead sanity check...")
 
+
+print(f"[DEBUG] Displayed {count} mapped opportunities")
+
+# --- normal pipeline flow here ---
+params = build_sam_params(args)
+# continue with full ingestion/processing...
 
 if __name__ == "__main__":
     main()

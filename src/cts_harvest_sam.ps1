@@ -1,10 +1,10 @@
 pwsh C:\CTS\Lead_Generation\src\cts_harvest_sam.ps1 `
   -Query 'Kove software defined memory virtualization storage performance' `
-  -From '2025-08-01' -To '2025-08-26' `
+  -From '2025-01-01' -To '2025-08-26' `
   -Limit 50 -ThrottleMs 1200 -MaxRetries 5 `
   -DbPath 'C:\CTS\Lead_Generation\leads.db' `
   -ExportDir 'C:\CTS\Lead_Generation\exports'
-<#
+<# 
 cts_harvest_sam.ps1
 Harvest SAM.gov in monthly chunks via CTS shim with throttling & retries.
 
@@ -133,15 +133,19 @@ foreach ($s in $slices) {
   if ($stdout) { $stdout | Tee-Object -FilePath $logPath -Append | Out-Null }
   if ($stderr) { "ERR: $stderr" | Tee-Object -FilePath $logPath -Append | Out-Null }
 
+$had429 = ($stdout -match '429 rate-limit') -or ($stderr -match '429') -or ($stdout -match 'Retry-After')
   if ($proc.ExitCode -ne 0) {
     Write-Warning "Shim exited with code $($proc.ExitCode). Check the log: $logPath"
-    # soft pause before continuing to next month
-    Start-Sleep -Seconds ([Math]::Ceiling($ThrottleMs/1000.0) + 3)
+    $sleepMs = [Math]::Max($ThrottleMs + 1000, 3000)
+    Start-Sleep -Milliseconds $sleepMs
   } else {
-    # polite pause between months
+    # If we saw signs of throttling, bump throttle for the next slice by 25% (cap 5000ms)
+    if ($had429) {
+      $ThrottleMs = [Math]::Min([int]([double]$ThrottleMs * 1.25), 5000)
+      "INFO: Detected throttling; increasing ThrottleMs to $ThrottleMs ms" | Tee-Object -FilePath $logPath -Append | Out-Null
+    }
     Start-Sleep -Milliseconds $ThrottleMs
   }
-}
 
 "Finished: $(Get-Date)" | Tee-Object -FilePath $logPath -Append | Out-Null
 Write-Host "Harvest complete. Log: $logPath" -ForegroundColor Green

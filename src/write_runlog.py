@@ -5,7 +5,7 @@ from pathlib import Path
 
 def write_runlog(summary: dict, out_dir: Path, fmt: str = "md"):
     now = dt.datetime.now()
-    sub = out_dir / now.strftime("%Y") / now.strftime("%m")
+    sub = Path(out_dir) / now.strftime("%Y") / now.strftime("%m")
     sub.mkdir(parents=True, exist_ok=True)
     ts = now.strftime("%Y%m%d_%H%M")
     written = []
