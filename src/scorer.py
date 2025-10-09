@@ -1,74 +1,97 @@
-import numpy as np
+import os
 import re
-from sentence_transformers import SentenceTransformer
-from fuzzywuzzy import fuzz
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Dict, Optional
 import tomllib
 
-# Load config & model (explicit for standalone runs)
-with open("../configs/leadgen.toml", "rb") as f:
+# Load config with robust path (works for direct run or import)
+config_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'leadgen.toml')
+with open(config_path, "rb") as f:
     config = tomllib.load(f)
-KEYWORDS = config["filters"]["keywords"]
-NAICS_CODES = config["filters"]["naics_codes"]
-FIT_THRESHOLD = config["filters"]["fit_threshold"]
-RISK_THRESHOLD = config["filters"]["risk_threshold"]
-MIN_DAYS_TO_DUE = config["filters"]["min_days_to_due"]
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Interpolate env vars (handles multiple if needed)
+def interpolate_env(val):
+    if isinstance(val, str) and '$env:' in val:
+        env_key = val.split('$env:')[1].split()[0]  # Extract key like 'SAM_API_KEY_1'
+        return os.environ.get(env_key, val)  # Fallback to literal if env var missing
+    return val
 
-def compute_days_to_due(deadline_str: str) -> int:
+# Apply to the config dict recursively (simple version for your sections)
+for section in config:
+    for key, value in config[section].items():
+        config[section][key] = interpolate_env(value)
+
+def strict_keyword_match(text: str, keywords: list) -> int:
+    """Count exact keyword matches in text (case-insensitive)."""
+    text_lower = text.lower()
+    matches = sum(1 for kw in keywords if re.search(rf'\b{kw.lower()}\b', text_lower))
+    return matches
+
+def fit_score(text: str, keywords: list) -> float:
+    """Normalized fit score (0.0-1.0) based on keyword density and matches."""
+    if not text:
+        return 0.0
+    match_count = strict_keyword_match(text, keywords)
+    text_words = len(re.findall(r'\w+', text.lower()))
+    density = match_count / max(len(keywords), 1)  # Normalize by keywords
+    if text_words > 0:
+        density = min(density + (match_count / text_words), 1.0)  # Boost for density
+    return density
+
+def ai_enhanced_score(text: str, keywords: list) -> float:
+    """Stub for AI scoring (e.g., via OpenAI embeddings similarity). Returns 0.0-1.0 fit."""
+    # TODO: Integrate real AI; for now, enhance fit_score
+    base_fit = fit_score(text, keywords)
+    return min(base_fit * 1.2, 1.0)  # Slight boost for demo
+
+def risk_score(lead: Dict) -> float:
+    """Heuristic risk: 0.0 (low) to 1.0 (high). E.g., incumbent mentions, short deadline."""
+    text = (lead.get('description', '') + ' ' + lead.get('parsed_doc_text', '')).lower()
+    risk_factors = ['incumbent', 'current contractor', 'sole source']  # From config if expanded
+    risk_hits = sum(1 for factor in risk_factors if factor in text)
+    days_to_due = compute_days_to_due(lead)
+    deadline_risk = 1.0 if days_to_due and days_to_due < 30 else 0.5 if days_to_due and days_to_due < 60 else 0.0
+    return min((risk_hits * 0.2) + deadline_risk, 1.0)
+
+def compute_days_to_due(lead: Dict) -> Optional[int]:
+    """Days until response deadline; None if no deadline."""
+    deadline_str = lead.get('response_deadline')
     if not deadline_str:
-        return 0
+        return None
     try:
-        deadline = datetime.strptime(deadline_str, '%Y-%m-%d').date()
-        today = datetime.now().date()
-        return (deadline - today).days
+        deadline = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M:%S')  # Adjust format if needed
+        return (deadline - datetime.now()).days
     except ValueError:
-        return 0
+        try:
+            deadline = datetime.strptime(deadline_str, '%Y-%m-%dT%H:%M:%S')  # ISO alt
+            return (deadline - datetime.now()).days
+        except ValueError:
+            return None
 
-def strict_keyword_match(title: str, description: str, naics: str) -> bool:
-    """First-pass: Strict exact/partial match (no AI/fuzzy). Returns True if any keyword/NAICS hits."""
-    text = f"{title} {description}".lower()
-    # Exact substring or word-boundary match
-    for kw in KEYWORDS:
-        if re.search(rf'\b{re.escape(kw.lower())}\b', text) or kw.lower() in text:
-            return True
-    for code in NAICS_CODES:
-        if code in str(naics):
-            return True
-    return False
+def should_triage(lead: Dict) -> bool:
+    """Triage if overall score >= threshold and within filters (e.g., value, days)."""
+    text = lead.get('description', '') + ' ' + lead.get('parsed_doc_text', '')
+    fit = fit_score(text, config['filters']['keywords'])  # Use new fit_score
+    risk = risk_score(lead)
+    overall = (fit * config['scoring']['fit_weight']) + ((1 - risk) * config['scoring']['risk_weight'])
 
-def ai_enhanced_score(title: str, description: str, naics: str, parsed_doc_text: str = None) -> float:
-    """AI layer: Fuzzy + semantic on base text + any parsed doc."""
-    full_text = f"{title} {description} {parsed_doc_text or ''}".lower()
-    # Fuzzy keywords (now on enriched text)
-    keyword_scores = [fuzz.ratio(full_text, kw.lower()) for kw in KEYWORDS]
-    keyword_fit = max(keyword_scores) if keyword_scores else 0
-    naics_fit = 100 if any(code in str(naics) for code in NAICS_CODES) else 0
-    # Semantic embeddings
-    sentences = [full_text] + KEYWORDS
-    embeddings = model.encode(sentences)
-    if len(embeddings) > 1:
-        cosine_sim = np.dot(embeddings[0], embeddings[1:]).max() / (np.linalg.norm(embeddings[0]) * np.linalg.norm(embeddings[1:]).max() + 1e-8)
-        semantic_fit = cosine_sim * 100
-    else:
-        semantic_fit = 0
-    return (0.4 * keyword_fit) + (0.3 * naics_fit) + (0.3 * semantic_fit)
+    days_to_due = compute_days_to_due(lead)
+    value = lead.get('estimatedValue', 0)  # Assume from lead dict; fetch if needed
+    within_days = days_to_due is None or (days_to_due <= config['filters']['max_days_to_due'] and days_to_due > 0)
+    within_value = value >= config['filters']['min_value']
+    no_excludes = not any(ex in text.lower() for ex in config['filters']['exclude_keywords'])
 
-def risk_score(soc: str, days_to_due: int) -> float:
-    risk = 50.0
-    if soc and 'small business' in soc.lower():
-        risk -= 30
-    if days_to_due > 60:
-        risk -= 20
-    elif days_to_due < 15:
-        risk += 20
-    return max(0, min(100, risk))
-
-def should_triage(fit: float, risk: float, days_to_due: int) -> bool:
-    return fit >= FIT_THRESHOLD and risk <= RISK_THRESHOLD and days_to_due >= MIN_DAYS_TO_DUE
+    return overall >= config['scoring']['threshold'] and within_days and within_value and no_excludes
 
 # Test stub
 if __name__ == "__main__":
-    print(strict_keyword_match("Financial Cloud RFP", "Market data needed", "541511"))  # True
-    print(ai_enhanced_score("Test", "Analytics", "541511", "Investment tools in doc"))  # ~75+
+    mock_lead = {
+        "description": "Software development consulting IT services incumbent",
+        "parsed_doc_text": "",
+        "response_deadline": (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d %H:%M:%S'),
+        "estimatedValue": 15000
+    }
+    print(f"Fit score: {fit_score(mock_lead['description'], config['filters']['keywords']):.2f}")
+    print(f"Risk score: {risk_score(mock_lead):.2f}")
+    print(f"Triage mock lead: {should_triage(mock_lead)}")
+    print(f"Days to due: {compute_days_to_due(mock_lead)}")

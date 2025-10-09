@@ -1,9 +1,9 @@
 import sqlite3
-from fetcher import fetch_sam_opps, map_to_lead
-from scorer import strict_keyword_match, ai_enhanced_score, risk_score, compute_days_to_due, should_triage
-from detector import has_changed
-from storage import init_db, upsert_lead
-from triage import query_triagable, write_triage
+from src.fetcher import fetch_sam_opps, map_to_lead
+from src.scorer import strict_keyword_match, ai_enhanced_score, risk_score, compute_days_to_due, should_triage
+from src.detector import has_changed
+from src.storage import init_db, upsert_lead
+from src.triage import query_triagable, write_triage
 import tomllib
 
 # Load config for thresholds
@@ -53,4 +53,18 @@ def main():
     write_triage(triaged_leads)
 
 if __name__ == "__main__":
-    main()
+    init_db()  # Setup DB
+    print("Fetching SAM opps...")
+    opps = fetch_sam_opps(parse_attachments=True)  # Enable parsing
+    leads = [map_to_lead(opp) for opp in opps]
+    print(f"Fetched {len(leads)} leads")
+    triaged = triaged_leads(leads)
+    print(f"Triaged {len(triaged)} hot leads (keyword matches: see scores)")
+    if triaged:
+        output = write_triage(triaged)
+        print(f"Exported to {output}")
+    else:
+        print("No matches—tune keywords/dates in config!")
+    # Bonus: Query triagable for next run
+    triagable = query_triagable()
+    print(f"{len(triagable)} triagable leads in DB")

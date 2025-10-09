@@ -1,0 +1,20 @@
+[filters]
+keywords = ["software", "development", "consulting", "IT services"]
+exclude_keywords = ["maintenance", "repair"]
+min_value = 10000
+max_days_to_due = 90
+naics_codes = ["541511", "541512", "541513"]
+
+[scoring]
+fit_weight = 0.6
+risk_weight = 0.4
+threshold = 0.7
+
+[sam_api]
+base_url = "https://api.sam.gov"
+api_key = "$env:SAM_API_KEY_1"
+
+[api]
+limit = 5
+posted_from = "09/08/2025"
+posted_to = "10/08/2025"

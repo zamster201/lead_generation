@@ -1,54 +1,70 @@
+import os
 import json
-from datetime import datetime
-from pathlib import Path
-import sqlite3
-import pandas as pd
+from typing import List, Dict
 import tomllib
-from typing import Dict, List  # Added for Dict type hints
-from scorer import should_triage
+from datetime import datetime, timedelta  # For date calcs
 
-# Load config (explicit for this module)
-with open("../configs/leadgen.toml", "rb") as f:
+# Load config with robust path (works for direct run or import)
+config_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'leadgen.toml')
+with open(config_path, "rb") as f:
     config = tomllib.load(f)
-MIN_DAYS_TO_DUE = config["filters"]["min_days_to_due"]
-FIT_THRESHOLD = config["filters"]["fit_threshold"]
-RISK_THRESHOLD = config["filters"]["risk_threshold"]
 
-OUTPUT_DIR = "../outputs"
+# Interpolate env vars (handles multiple if needed)
+def interpolate_env(val):
+    if isinstance(val, str) and '$env:' in val:
+        env_key = val.split('$env:')[1].split()[0]  # Extract key like 'SAM_API_KEY_1'
+        return os.environ.get(env_key, val)  # Fallback to literal if env var missing
+    return val
 
-def write_triage(leads: List[Dict]):
-    Path(OUTPUT_DIR).mkdir(exist_ok=True)
-    today = datetime.now().strftime('%Y-%m-%d')
-    md_path = Path(OUTPUT_DIR) / f"Daily_Triage_{today}.md"
-    json_path = Path(OUTPUT_DIR) / f"triage_{today}.json"
+# Apply to the config dict recursively (simple version for your sections)
+for section in config:
+    for key, value in config[section].items():
+        config[section][key] = interpolate_env(value)
 
-    triaged = [l for l in leads if should_triage(l["fit_score"], l["risk_score"], l["days_to_due"])]
+from src.scorer import should_triage, fit_score, risk_score  # For triage logic
+from src.storage import init_db, upsert_lead, query_leads  # Assuming DB integration
 
-    with open(md_path, "w") as f:
-        f.write(f"# ClearTrend Daily Triage - {today}\n\n")
-        f.write(f"**{len(triaged)} high-fit opportunities.**\n\n")
-        for lead in sorted(triaged, key=lambda x: x["fit_score"], reverse=True):
-            f.write(f"## {lead['title']} (Fit: {lead['fit_score']:.0f}, Risk: {lead['risk_score']:.0f}, Days: {lead['days_to_due']})\n")
-            f.write(f"**Status:** {lead['status_stage']} | **POC:** {lead['point_of_contact']}\n\n")
-            f.write(f"{lead['description'][:300]}...\n\n")
-            f.write(f"[SAM Link]({lead['link']})\n\n---\n")
+def query_triagable(since_date: str = None) -> List[Dict]:
+    """Query leads that are triagable (not yet triaged) since a date (default: last 7 days)."""
+    if since_date is None:
+        since_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    # Use storage query for non-triaged leads
+    all_leads = query_leads(since=since_date, triaged_only=False)
+    triagable = [lead for lead in all_leads if not lead.get('triaged', False)]
+    return triagable
 
-    with open(json_path, "w") as f:
-        json.dump({"timestamp": today, "leads": triaged}, f, indent=2)
+def triaged_leads(leads: List[Dict]) -> List[Dict]:
+    """Filter and score leads, return only those that should be triaged."""
+    triaged = []
+    for lead in leads:
+        if should_triage(lead):
+            lead['fit_score'] = fit_score(lead.get('description', '') + ' ' + lead.get('parsed_doc_text', ''), config['filters']['keywords'])
+            lead['risk_score'] = risk_score(lead)
+            lead['triaged'] = True
+            lead['triaged_at'] = datetime.now().isoformat()
+            triaged.append(lead)
+    return triaged
 
-    print(f"Triage saved: {md_path} ({len(triaged)} leads)")
-
-def query_triagable() -> List[Dict]:
-    conn = sqlite3.connect("../opps.db")
-    df = pd.read_sql_query("""
-        SELECT * FROM opportunities
-        WHERE days_to_due >= ? AND fit_score >= ? AND risk_score <= ?
-    """, conn, params=(MIN_DAYS_TO_DUE, FIT_THRESHOLD, RISK_THRESHOLD))
-    conn.close()
-    return df.to_dict("records")
+def write_triage(triaged: List[Dict], output_file: str = None) -> str:
+    """Write triaged leads to JSON file (default: triaged_leads.json in root)."""
+    if output_file is None:
+        output_file = os.path.join(os.path.dirname(__file__), '..', 'triaged_leads.json')
+    # Upsert to DB first
+    for lead in triaged:
+        upsert_lead(lead)
+    # Write to file
+    with open(output_file, 'w') as f:
+        json.dump(triaged, f, indent=2, default=str)
+    return output_file
 
 # Test stub
 if __name__ == "__main__":
-    # Mock leads for write_triage test
-    mock_leads = [{"fit_score": 80, "risk_score": 40, "days_to_due": 35, "title": "Test Lead", "status_stage": "new", "point_of_contact": "POC", "description": "Test desc", "link": "test.link"}]
-    write_triage(mock_leads)
+    from src.fetcher import fetch_sam_opps, map_to_lead
+    opps = fetch_sam_opps(limit=3)
+    leads = [map_to_lead(opp) for opp in opps]
+    triaged = triaged_leads(leads)
+    print(f"{len(triaged)} triaged leads")
+    output = write_triage(triaged)
+    print(f"Wrote to {output}")
+    triagable = query_triagable()
+    print(f"Queried {len(triagable)} triagable leads")
